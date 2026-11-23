@@ -27,7 +27,6 @@ EVAL_CASES = [
         "critical": False,
         "notes": "Straightforward logging. Agent should look up nutrition, then log.",
     },
-
     # ── Case 2: Vague quantity ───────────────────────────────────────────
     {
         "id": "vague_quantity",
@@ -41,7 +40,6 @@ EVAL_CASES = [
         "critical": False,
         "notes": "Agent should estimate ~2/3 serving and mention the assumption.",
     },
-
     # ── Case 3: Too vague — should ask ───────────────────────────────────
     {
         "id": "too_vague",
@@ -54,7 +52,6 @@ EVAL_CASES = [
         "critical": False,
         "notes": "Agent should ask what they snacked on, not log 'grazed' with 0 cal.",
     },
-
     # ── Case 4: CRITICAL — "same as yesterday" ──────────────────────────
     {
         "id": "same_as_yesterday",
@@ -70,7 +67,6 @@ EVAL_CASES = [
             "Agent should call get_meals(date='yesterday') and replicate."
         ),
     },
-
     # ── Case 5: CRITICAL — Correction without double-count ───────────────
     {
         "id": "correction_rotis",
@@ -87,7 +83,6 @@ EVAL_CASES = [
             "Daily totals must show corrected value, not original + corrected."
         ),
     },
-
     # ── Case 6: Protein check ────────────────────────────────────────────
     {
         "id": "protein_check",
@@ -100,7 +95,6 @@ EVAL_CASES = [
         "critical": False,
         "notes": "Should call get_daily_totals and report protein.",
     },
-
     # ── Case 7: Calorie check ────────────────────────────────────────────
     {
         "id": "calorie_check",
@@ -113,7 +107,6 @@ EVAL_CASES = [
         "critical": False,
         "notes": "Should call get_daily_totals and show calorie progress.",
     },
-
     # ── Case 8: CRITICAL — Photo + caption → one meal ────────────────────
     {
         "id": "photo_with_caption",
@@ -132,7 +125,6 @@ EVAL_CASES = [
             "Must result in ONE meal log (half portion), not two."
         ),
     },
-
     # ── Case 9: Photo only (no caption) ──────────────────────────────────
     {
         "id": "photo_only",
@@ -146,7 +138,6 @@ EVAL_CASES = [
         "critical": False,
         "notes": "Photo with no caption. Vision model identifies food, agent logs.",
     },
-
     # ── Case 10: "my usual" ──────────────────────────────────────────────
     {
         "id": "my_usual",
@@ -160,7 +151,6 @@ EVAL_CASES = [
         "critical": False,
         "notes": "Should resolve via memory lookup. If no memory exists, should ask what 'my usual' means.",
     },
-
     # ── Case 11: Preference storage ──────────────────────────────────────
     {
         "id": "vegetarian_preference",
@@ -180,9 +170,9 @@ EVAL_CASES = [
 
 def print_eval_summary():
     """Print a summary of all eval cases."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"CalorAI Eval Cases: {len(EVAL_CASES)} total")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     critical = [c for c in EVAL_CASES if c.get("critical")]
     print(f"🔴 CRITICAL cases ({len(critical)}):")
@@ -194,7 +184,7 @@ def print_eval_summary():
         if not c.get("critical"):
             print(f"   {c['id']}: {c['input'][:50]}")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
 
 
 if __name__ == "__main__":

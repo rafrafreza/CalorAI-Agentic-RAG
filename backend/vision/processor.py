@@ -1,130 +1,118 @@
 """
-Gemini Vision processor — extracts structured food descriptions from images.
+Vision pipeline: photo -> structured food items (a separate model call from the conversation).
 
-This is architecturally separated from the text conversation model:
-  - Vision path: Gemini multimodal — extracts structured food data ONLY
-  - Text path: Gemini text — handles conversation, reasoning, tool-calling
+The vision model ONLY identifies foods and portions. It never converses, never calls
+tools and never produces calorie numbers: its items are grounded through the same RAG
+engine as typed text, so a photo of biryani and the word "biryani" get the same numbers.
 
-Both use the same provider (Gemini) but are logically distinct pipelines.
-The vision model's output feeds INTO the text pipeline as if the user had
-typed the description. This separation is a deliberate architectural choice,
-not "running everything through one model" (which is a stated red flag).
-
-Why Gemini for both:
-  - Native multimodal support (no separate image-to-text service needed)
-  - Single API key / single provider simplifies deployment
-  - Gemini Flash is fast enough for both paths
-  - Cost-effective for a test task
+Latency: images are downscaled to <= 1024 px JPEG before upload (phone photos are
+often 4-12 MP; the model doesn't need that) and the response is schema-constrained
+JSON, so there is no fragile free-text parsing.
 """
 
+from __future__ import annotations
+
+import io
 import json
-import os
-import time
-import base64
+from functools import lru_cache
 from pathlib import Path
 
-from google import genai
-from google.genai import types
-from dotenv import load_dotenv
+from PIL import Image, ImageOps
+from pydantic import BaseModel
 
 from backend.agent.prompts import VISION_PROMPT
-from backend.models.schemas import VisionResult, MealItem
+from backend.core.config import get_settings
+from backend.models.schemas import MealItem, VisionResult
 
-load_dotenv()
-client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+MAX_SIDE = 1024
+
+
+class _SchemaItem(BaseModel):
+    name: str
+    quantity: float
+    unit: str
+
+
+class _VisionSchema(BaseModel):
+    """Constraint-free mirror of VisionResult for Gemini's response_schema (no defaults/bounds)."""
+
+    description: str
+    items: list[_SchemaItem]
+    confidence: float
+    notes: str
+
+
+def prepare_image(path: str | Path, max_side: int = MAX_SIDE) -> bytes:
+    with Image.open(path) as img:
+        img = ImageOps.exif_transpose(img).convert("RGB")
+        img.thumbnail((max_side, max_side))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85, optimize=True)
+        return buf.getvalue()
+
+
+@lru_cache(maxsize=1)
+def _client(api_key: str):
+    from google import genai
+
+    return genai.Client(api_key=api_key)
 
 
 def extract_food_from_image(image_path: str) -> VisionResult:
-    """
-    Send an image to Gemini Vision and extract a structured food description.
+    """Blocking call (run it in a worker thread). Raises if the model is unavailable."""
+    from google.genai import types
 
-    This is a SEPARATE model call from the conversation agent. Its output
-    is a structured VisionResult that gets merged with any text caption
-    before being passed to the conversation agent.
-
-    Args:
-        image_path: Path to the image file
-
-    Returns:
-        VisionResult with description, items, confidence, and notes
-
-    Raises:
-        FileNotFoundError: If the image file doesn't exist
-        ValueError: If the image can't be processed
-    """
+    settings = get_settings()
+    if not settings.google_api_key:
+        raise RuntimeError("Photo analysis requires GOOGLE_API_KEY")
     path = Path(image_path)
     if not path.exists():
         raise FileNotFoundError(f"Image not found: {image_path}")
 
-    # Read and prepare the image
-    image_data = path.read_bytes()
-
-    # Determine MIME type
-    suffix = path.suffix.lower()
-    mime_types = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".webp": "image/webp",
-        ".gif": "image/gif",
-    }
-    mime_type = mime_types.get(suffix, "image/jpeg")
-
-    # Use Gemini Flash for vision (fast, multimodal-capable)
-    start_time = time.time()
-
-    response = client.models.generate_content(
-        model="gemini-3.1-flash-lite",
-        contents=[
-            VISION_PROMPT,
-            types.Part.from_bytes(
-                data=image_data,
-                mime_type=mime_type,
-            ),
-        ],
+    response = _client(settings.google_api_key).models.generate_content(
+        model=settings.vision_model,
+        contents=[VISION_PROMPT, types.Part.from_bytes(data=prepare_image(path), mime_type="image/jpeg")],
         config=types.GenerateContentConfig(
-            temperature=0.2,  # Low temperature for structured extraction
+            temperature=0.2,
             max_output_tokens=1024,
+            response_mime_type="application/json",
+            response_schema=_VisionSchema,
         ),
     )
-
-    vision_latency_ms = (time.time() - start_time) * 1000
-
-    # Parse the response
-    raw_text = response.text.strip()
-
-    # Strip markdown code fences if present
-    if raw_text.startswith("```"):
-        lines = raw_text.split("\n")
-        # Remove first line (```json) and last line (```)
-        lines = [l for l in lines if not l.strip().startswith("```")]
-        raw_text = "\n".join(lines)
-
-    try:
-        data = json.loads(raw_text)
-    except json.JSONDecodeError:
-        # If parsing fails, create a basic result from the raw text
+    parsed = getattr(response, "parsed", None)
+    if isinstance(parsed, _VisionSchema):
         return VisionResult(
-            description=raw_text[:200],
+            description=parsed.description,
+            items=[MealItem(**i.model_dump()) for i in parsed.items],
+            confidence=min(1.0, max(0.0, parsed.confidence)),
+            notes=parsed.notes,
+        )
+    raw = (response.text or "").strip().removeprefix("```json").removeprefix("```").removesuffix("```")
+    try:
+        return VisionResult.model_validate(json.loads(raw))
+    except (json.JSONDecodeError, ValueError):
+        return VisionResult(
+            description=raw[:200] or "Unrecognised image",
             items=[],
             confidence=0.3,
-            notes=f"Vision model returned non-JSON response. Raw: {raw_text[:100]}",
+            notes="Vision model returned an unexpected format.",
         )
 
-    # Build VisionResult
-    items = []
-    for item in data.get("items", []):
-        items.append(MealItem(
-            name=item.get("name", "unknown"),
-            quantity=float(item.get("quantity", 1.0)),
-            unit=item.get("unit", "serving"),
-        ))
 
-    result = VisionResult(
-        description=data.get("description", "Food detected in image"),
-        items=items,
-        confidence=float(data.get("confidence", 0.5)),
-        notes=data.get("notes", ""),
-    )
+def summarize_for_agent(result: VisionResult, caption: str) -> str:
+    """Merge the vision output and the user's caption into ONE user turn (photo + caption = one meal)."""
+    items = ", ".join(f"{i.quantity:g} {i.unit} {i.name}" for i in result.items) or "no food detected"
+    lines = [
+        f"[Photo analysis — confidence {result.confidence:.0%}]",
+        f"Detected: {result.description}",
+        f"Items: {items}",
+    ]
+    if result.notes:
+        lines.append(f"Notes: {result.notes}")
+    if result.confidence < 0.7:
+        lines.append("(Low confidence: confirm the items with the user before logging.)")
+    lines.append(f"User caption: {caption.strip()}" if caption and caption.strip() else "User caption: (none)")
+    return "\n".join(lines)
 
-    return result
+
+__all__ = ["MealItem", "VisionResult", "extract_food_from_image", "prepare_image", "summarize_for_agent"]

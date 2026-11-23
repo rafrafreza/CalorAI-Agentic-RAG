@@ -1,24 +1,23 @@
 """
-SQLite database initialization and connection management.
+SQLite persistence: schema, connections and idempotent migrations.
 
-Design decision: daily totals are computed on-the-fly via SUM queries rather
-than a materialized table. This avoids dual-write consistency bugs — the exact
-class of bug the evaluators check for ("totals that break on a correction").
-Trade-off: slightly more CPU per totals query, but correctness is guaranteed
-by a single source of truth.
+Design decision (kept from v1, and still the right call): daily totals are computed
+on the fly with SUM queries instead of a materialised totals table. One source of
+truth means a correction can never leave totals stale - the exact bug class
+("totals that break on a correction") this product has to rule out.
 """
 
-import sqlite3
-import os
-from contextlib import contextmanager
+from __future__ import annotations
 
-DB_PATH = os.getenv("CALORAI_DB_PATH", "calorai.db")
+import os
+import sqlite3
+from contextlib import contextmanager
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS meals (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id     TEXT NOT NULL DEFAULT 'default',
-    timestamp   DATETIME NOT NULL DEFAULT (datetime('now')),
+    timestamp   DATETIME NOT NULL DEFAULT (datetime('now', 'localtime')),
     meal_type   TEXT,
     description TEXT NOT NULL,
     items       TEXT NOT NULL DEFAULT '[]',
@@ -54,6 +53,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     session_id  TEXT NOT NULL,
     role        TEXT NOT NULL,
     content     TEXT NOT NULL,
+    meta        TEXT,
     timestamp   DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -65,21 +65,30 @@ CREATE INDEX IF NOT EXISTS idx_conversations_session
     ON conversations(user_id, session_id);
 """
 
+# (table, column, DDL) - additive migrations so v1 databases keep working.
+_MIGRATIONS: list[tuple[str, str, str]] = [
+    ("conversations", "meta", "ALTER TABLE conversations ADD COLUMN meta TEXT"),
+]
 
-def get_connection(db_path: str | None = None) -> sqlite3.Connection:
-    """Get a SQLite connection with WAL mode and row factory."""
-    path = db_path or DB_PATH
-    conn = sqlite3.connect(path)
+
+def db_path(override: str | None = None) -> str:
+    """Resolved at call time so tests (and operators) can point at another file."""
+    return override or os.getenv("CALORAI_DB_PATH", "calorai.db")
+
+
+def get_connection(path: str | None = None) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path(path), timeout=10, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
 @contextmanager
-def get_db(db_path: str | None = None):
-    """Context manager for database connections with auto-commit/rollback."""
-    conn = get_connection(db_path)
+def get_db(path: str | None = None):
+    """Connection context manager with commit-on-success / rollback-on-error."""
+    conn = get_connection(path)
     try:
         yield conn
         conn.commit()
@@ -90,12 +99,16 @@ def get_db(db_path: str | None = None):
         conn.close()
 
 
-def init_db(db_path: str | None = None):
-    """Initialize database schema. Safe to call multiple times (IF NOT EXISTS)."""
-    with get_db(db_path) as conn:
+def init_db(path: str | None = None) -> None:
+    """Create tables and apply additive migrations. Safe to call repeatedly."""
+    with get_db(path) as conn:
         conn.executescript(SCHEMA_SQL)
+        for table, column, ddl in _MIGRATIONS:
+            cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in cols:
+                conn.execute(ddl)
 
 
 if __name__ == "__main__":
     init_db()
-    print(f"Database initialized at {DB_PATH}")
+    print(f"Database initialised at {db_path()}")

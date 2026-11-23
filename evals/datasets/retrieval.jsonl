@@ -1,0 +1,221 @@
+{"query": "butter chicken", "expected": "butter_chicken", "tag": "canonical"}
+{"query": "palak paneer", "expected": "palak_paneer", "tag": "canonical"}
+{"query": "masala dosa", "expected": "masala_dosa", "tag": "canonical"}
+{"query": "chole bhature", "expected": "chole_bhature", "tag": "canonical"}
+{"query": "gulab jamun", "expected": "gulab_jamun", "tag": "canonical"}
+{"query": "aloo paratha", "expected": "aloo_paratha", "tag": "canonical"}
+{"query": "veg pulao", "expected": "veg_pulao", "tag": "canonical"}
+{"query": "rajma chawal", "expected": "rajma_chawal", "tag": "canonical"}
+{"query": "pav bhaji", "expected": "pav_bhaji", "tag": "canonical"}
+{"query": "greek yogurt", "expected": "greek_yogurt", "tag": "canonical"}
+{"query": "chicken nuggets", "expected": "chicken_nuggets", "tag": "canonical"}
+{"query": "french fries", "expected": "french_fries", "tag": "canonical"}
+{"query": "pad thai", "expected": "pad_thai", "tag": "canonical"}
+{"query": "caesar salad", "expected": "caesar_salad", "tag": "canonical"}
+{"query": "peanut butter", "expected": "peanut_butter", "tag": "canonical"}
+{"query": "orange juice", "expected": "orange_juice", "tag": "canonical"}
+{"query": "dal makhani", "expected": "dal_makhani", "tag": "canonical"}
+{"query": "egg curry", "expected": "egg_curry", "tag": "canonical"}
+{"query": "fish curry", "expected": "fish_curry", "tag": "canonical"}
+{"query": "tandoori chicken", "expected": "tandoori_chicken", "tag": "canonical"}
+{"query": "hot chocolate", "expected": "hot_chocolate", "tag": "canonical"}
+{"query": "sweet potato", "expected": "sweet_potato", "tag": "canonical"}
+{"query": "brown rice", "expected": "brown_rice", "tag": "canonical"}
+{"query": "black coffee", "expected": "black_coffee", "tag": "canonical"}
+{"query": "rice", "expected": "white_rice", "tag": "generic-default"}
+{"query": "dal", "expected": "dal_tadka", "tag": "generic-default"}
+{"query": "chai", "expected": "masala_chai", "tag": "generic-default"}
+{"query": "coffee", "expected": "black_coffee", "tag": "generic-default"}
+{"query": "milk", "expected": "whole_milk", "tag": "generic-default"}
+{"query": "egg", "expected": "boiled_egg", "tag": "generic-default"}
+{"query": "pizza", "expected": "cheese_pizza", "tag": "generic-default"}
+{"query": "salad", "expected": "green_salad", "tag": "generic-default"}
+{"query": "burger", "expected": "hamburger", "tag": "generic-default"}
+{"query": "cake", "expected": "chocolate_cake", "tag": "generic-default"}
+{"query": "smoothie", "expected": "banana_smoothie", "tag": "generic-default"}
+{"query": "biryani", "expected": "chicken_biryani", "tag": "generic-default"}
+{"query": "golgappa", "expected": "pani_puri", "tag": "synonym"}
+{"query": "puchka", "expected": "pani_puri", "tag": "synonym"}
+{"query": "murgh makhani", "expected": "butter_chicken", "tag": "synonym"}
+{"query": "saag paneer", "expected": "palak_paneer", "tag": "synonym"}
+{"query": "kaapi", "expected": "filter_coffee", "tag": "synonym"}
+{"query": "nariyal pani", "expected": "coconut_water", "tag": "synonym"}
+{"query": "dahi", "expected": "plain_curd", "tag": "synonym"}
+{"query": "anda bhurji", "expected": "egg_bhurji", "tag": "synonym"}
+{"query": "kanda poha", "expected": "poha", "tag": "synonym"}
+{"query": "chana masala", "expected": "chole", "tag": "synonym"}
+{"query": "dal fry", "expected": "dal_tadka", "tag": "synonym"}
+{"query": "momos", "expected": "veg_momos", "tag": "synonym"}
+{"query": "maggi", "expected": "instant_noodles", "tag": "synonym"}
+{"query": "chowmein", "expected": "hakka_noodles", "tag": "synonym"}
+{"query": "phulka", "expected": "roti", "tag": "synonym"}
+{"query": "bhindi", "expected": "bhindi_masala", "tag": "synonym"}
+{"query": "begun bharta", "expected": "baingan_bharta", "tag": "synonym"}
+{"query": "machher jhol", "expected": "fish_curry", "tag": "synonym"}
+{"query": "rasagola", "expected": "rasgulla", "tag": "synonym"}
+{"query": "kesari bath", "expected": "suji_halwa", "tag": "synonym"}
+{"query": "shikanji", "expected": "nimbu_pani", "tag": "synonym"}
+{"query": "doodh", "expected": "whole_milk", "tag": "synonym"}
+{"query": "garbanzo beans", "expected": "chickpeas", "tag": "synonym"}
+{"query": "spag bol", "expected": "spaghetti_bolognese", "tag": "synonym"}
+{"query": "oj", "expected": "orange_juice", "tag": "synonym"}
+{"query": "potstickers", "expected": "gyoza", "tag": "synonym"}
+{"query": "bombay sandwich", "expected": "veg_sandwich", "tag": "synonym"}
+{"query": "kala jamun", "expected": "gulab_jamun", "tag": "synonym"}
+{"query": "thayir sadam", "expected": "curd_rice", "tag": "synonym"}
+{"query": "pongal", "expected": "ven_pongal", "tag": "synonym"}
+{"query": "kheema", "expected": "keema", "tag": "synonym"}
+{"query": "fox nuts", "expected": "makhana", "tag": "synonym"}
+{"query": "aam lassi", "expected": "mango_lassi", "tag": "synonym"}
+{"query": "boondi raita", "expected": "raita", "tag": "synonym"}
+{"query": "achaar", "expected": "pickle", "tag": "synonym"}
+{"query": "desi ghee", "expected": "ghee", "tag": "synonym"}
+{"query": "coke zero", "expected": "diet_cola", "tag": "synonym"}
+{"query": "kaju", "expected": "cashews", "tag": "synonym"}
+{"query": "badam", "expected": "almonds", "tag": "synonym"}
+{"query": "kathi roll", "expected": "chicken_kathi_roll", "tag": "synonym"}
+{"query": "tea with milk", "expected": "masala_chai", "tag": "synonym"}
+{"query": "rice pudding", "expected": "kheer", "tag": "synonym"}
+{"query": "parontha", "expected": "paratha", "tag": "transliteration"}
+{"query": "biriyaani", "expected": "chicken_biryani", "tag": "transliteration"}
+{"query": "daal makhni", "expected": "dal_makhani", "tag": "transliteration"}
+{"query": "paav bhaaji", "expected": "pav_bhaji", "tag": "transliteration"}
+{"query": "dhosa", "expected": "plain_dosa", "tag": "transliteration"}
+{"query": "sambhaar", "expected": "sambar", "tag": "transliteration"}
+{"query": "rasgula", "expected": "rasgulla", "tag": "transliteration"}
+{"query": "gulab jamoon", "expected": "gulab_jamun", "tag": "transliteration"}
+{"query": "jalebee", "expected": "jalebi", "tag": "transliteration"}
+{"query": "bhindee", "expected": "bhindi_masala", "tag": "transliteration"}
+{"query": "keemah", "expected": "keema", "tag": "transliteration"}
+{"query": "nihaari", "expected": "nihari", "tag": "transliteration"}
+{"query": "panir tikka", "expected": "paneer_tikka", "tag": "transliteration"}
+{"query": "cholle bhature", "expected": "chole_bhature", "tag": "transliteration"}
+{"query": "aaloo gobhi", "expected": "aloo_gobi", "tag": "transliteration"}
+{"query": "matter paneer", "expected": "matar_paneer", "tag": "transliteration"}
+{"query": "rajmah chawal", "expected": "rajma_chawal", "tag": "transliteration"}
+{"query": "upmaa", "expected": "upma", "tag": "transliteration"}
+{"query": "idlee", "expected": "idli", "tag": "transliteration"}
+{"query": "vadaa pav", "expected": "vada_pav", "tag": "transliteration"}
+{"query": "khichree", "expected": "khichdi", "tag": "transliteration"}
+{"query": "barfee", "expected": "barfi", "tag": "transliteration"}
+{"query": "chaai", "expected": "masala_chai", "tag": "transliteration"}
+{"query": "lassee", "expected": "sweet_lassi", "tag": "transliteration"}
+{"query": "rumaali roti", "expected": "rumali_roti", "tag": "transliteration"}
+{"query": "bhatoore", "expected": "bhatura", "tag": "transliteration"}
+{"query": "suji halva", "expected": "suji_halwa", "tag": "transliteration"}
+{"query": "kulfee", "expected": "kulfi", "tag": "transliteration"}
+{"query": "shrikand", "expected": "shrikhand", "tag": "transliteration"}
+{"query": "dhokala", "expected": "dhokla", "tag": "transliteration"}
+{"query": "kachauri", "expected": "kachori", "tag": "transliteration"}
+{"query": "samosaa", "expected": "samosa", "tag": "transliteration"}
+{"query": "thepala", "expected": "thepla", "tag": "transliteration"}
+{"query": "pao bhaji", "expected": "pav_bhaji", "tag": "transliteration"}
+{"query": "chiken tikka masala", "expected": "chicken_tikka_masala", "tag": "transliteration"}
+{"query": "chiken biryani", "expected": "chicken_biryani", "tag": "typo"}
+{"query": "paneeer butter masala", "expected": "paneer_butter_masala", "tag": "typo"}
+{"query": "omlette", "expected": "plain_omelette", "tag": "typo"}
+{"query": "spagetti bolognese", "expected": "spaghetti_bolognese", "tag": "typo"}
+{"query": "croisant", "expected": "croissant", "tag": "typo"}
+{"query": "brocoli", "expected": "broccoli", "tag": "typo"}
+{"query": "avacado", "expected": "avocado", "tag": "typo"}
+{"query": "bananna", "expected": "banana", "tag": "typo"}
+{"query": "strawberies", "expected": "strawberries", "tag": "typo"}
+{"query": "cappuchino", "expected": "cappuccino", "tag": "typo"}
+{"query": "quesadila", "expected": "quesadilla", "tag": "typo"}
+{"query": "hummos", "expected": "hummus", "tag": "typo"}
+{"query": "sandwhich", "expected": "veg_sandwich", "tag": "typo"}
+{"query": "chocolate chip cokie", "expected": "chocolate_chip_cookie", "tag": "typo"}
+{"query": "scrambeld eggs", "expected": "scrambled_eggs", "tag": "typo"}
+{"query": "pancaks", "expected": "pancakes", "tag": "typo"}
+{"query": "yoghourt", "expected": "plain_curd", "tag": "typo"}
+{"query": "tandori chicken", "expected": "tandoori_chicken", "tag": "typo"}
+{"query": "buter chicken", "expected": "butter_chicken", "tag": "typo"}
+{"query": "masla dosa", "expected": "masala_dosa", "tag": "typo"}
+{"query": "palak paner", "expected": "palak_paneer", "tag": "typo"}
+{"query": "chiken tikka", "expected": "chicken_tikka", "tag": "typo"}
+{"query": "fried rcie", "expected": "veg_fried_rice", "tag": "typo"}
+{"query": "muton biryani", "expected": "mutton_biryani", "tag": "typo"}
+{"query": "oatmeel", "expected": "oatmeal", "tag": "typo"}
+{"query": "lemonde", "expected": "nimbu_pani", "tag": "typo"}
+{"query": "peanut buter", "expected": "peanut_butter", "tag": "typo"}
+{"query": "gaucamole", "expected": "guacamole", "tag": "typo"}
+{"query": "watermelone", "expected": "watermelon", "tag": "typo"}
+{"query": "parathas", "expected": "paratha", "tag": "morphology"}
+{"query": "chapathis", "expected": "roti", "tag": "morphology"}
+{"query": "samosas", "expected": "samosa", "tag": "morphology"}
+{"query": "idlis", "expected": "idli", "tag": "morphology"}
+{"query": "boiled eggs", "expected": "boiled_egg", "tag": "morphology"}
+{"query": "almonds", "expected": "almonds", "tag": "morphology"}
+{"query": "dates", "expected": "dates", "tag": "morphology"}
+{"query": "cookies", "expected": "chocolate_chip_cookie", "tag": "morphology"}
+{"query": "Rotis", "expected": "roti", "tag": "morphology"}
+{"query": "PANI PURI", "expected": "pani_puri", "tag": "morphology"}
+{"query": "Masala-Dosa", "expected": "masala_dosa", "tag": "morphology"}
+{"query": "tomatoes", "expected": "tomato", "tag": "morphology"}
+{"query": "strawberry", "expected": "strawberries", "tag": "morphology"}
+{"query": "fries", "expected": "french_fries", "tag": "morphology"}
+{"query": "yellow lentils", "expected": "dal_tadka", "tag": "descriptive"}
+{"query": "spinach and cottage cheese curry", "expected": "palak_paneer", "tag": "descriptive"}
+{"query": "black lentils with butter", "expected": "dal_makhani", "tag": "descriptive"}
+{"query": "potato filled pastry", "expected": "samosa", "tag": "descriptive"}
+{"query": "mashed eggplant", "expected": "baingan_bharta", "tag": "descriptive"}
+{"query": "yogurt drink", "expected": "sweet_lassi", "tag": "descriptive"}
+{"query": "fermented rice crepe", "expected": "plain_dosa", "tag": "descriptive"}
+{"query": "fried dough balls in syrup", "expected": "gulab_jamun", "tag": "descriptive"}
+{"query": "grilled cottage cheese", "expected": "paneer_tikka", "tag": "descriptive"}
+{"query": "steamed rice cakes", "expected": "idli", "tag": "descriptive"}
+{"query": "mac and cheese", "expected": "mac_and_cheese", "tag": "compound"}
+{"query": "fish and chips", "expected": "fish_and_chips", "tag": "compound"}
+{"query": "bagel with cream cheese", "expected": "bagel_cream_cheese", "tag": "compound"}
+{"query": "bread and butter", "expected": "butter_toast", "tag": "compound"}
+{"query": "chicken tikka masala", "expected": "chicken_tikka_masala", "tag": "compound"}
+{"query": "paneer tikka masala", "expected": "paneer_tikka_masala", "tag": "compound"}
+{"query": "idli sambar", "expected": "idli_sambar", "tag": "compound"}
+{"query": "dal chawal", "expected": "dal_chawal", "tag": "compound"}
+{"query": "kadhi chawal", "expected": "kadhi_chawal", "tag": "compound"}
+{"query": "sweet and sour chicken", "expected": "sweet_sour_chicken", "tag": "compound"}
+{"query": "hot and sour soup", "expected": "hot_sour_soup", "tag": "compound"}
+{"query": "spaghetti with meat sauce", "expected": "spaghetti_bolognese", "tag": "compound"}
+{"query": "puri bhaji", "expected": "puri_bhaji", "tag": "compound"}
+{"query": "coffee with milk", "expected": "latte", "tag": "compound"}
+{"query": "dragon fruit smoothie", "expected": null, "tag": "out-of-kb"}
+{"query": "beef wellington", "expected": null, "tag": "out-of-kb"}
+{"query": "acai bowl", "expected": null, "tag": "out-of-kb"}
+{"query": "tiramisu", "expected": null, "tag": "out-of-kb"}
+{"query": "pierogi", "expected": null, "tag": "out-of-kb"}
+{"query": "injera", "expected": null, "tag": "out-of-kb"}
+{"query": "ceviche", "expected": null, "tag": "out-of-kb"}
+{"query": "shakshuka", "expected": null, "tag": "out-of-kb"}
+{"query": "paella", "expected": null, "tag": "out-of-kb"}
+{"query": "borscht", "expected": null, "tag": "out-of-kb"}
+{"query": "creme brulee", "expected": null, "tag": "out-of-kb"}
+{"query": "haggis", "expected": null, "tag": "out-of-kb"}
+{"query": "poutine", "expected": null, "tag": "out-of-kb"}
+{"query": "baklava", "expected": null, "tag": "out-of-kb"}
+{"query": "escargot", "expected": null, "tag": "out-of-kb"}
+{"query": "moussaka", "expected": null, "tag": "out-of-kb"}
+{"query": "goulash", "expected": null, "tag": "out-of-kb"}
+{"query": "kimchi jjigae", "expected": null, "tag": "out-of-kb"}
+{"query": "bubble tea", "expected": null, "tag": "out-of-kb"}
+{"query": "durian", "expected": null, "tag": "out-of-kb"}
+{"query": "jollof rice", "expected": null, "tag": "out-of-kb"}
+{"query": "lobster roll", "expected": null, "tag": "out-of-kb"}
+{"query": "fried ice cream", "expected": null, "tag": "out-of-kb"}
+{"query": "how am i doing today", "expected": null, "tag": "out-of-kb"}
+{"query": "hello there", "expected": null, "tag": "out-of-kb"}
+{"query": "my brother ate half", "expected": null, "tag": "out-of-kb"}
+{"query": "skipped lunch", "expected": null, "tag": "out-of-kb"}
+{"query": "what should i eat", "expected": null, "tag": "out-of-kb"}
+{"query": "thanks a lot", "expected": null, "tag": "out-of-kb"}
+{"query": "biryani", "expected": "veg_biryani", "tag": "profile", "profile": {"diet": "vegetarian"}}
+{"query": "tikka masala", "expected": "paneer_tikka_masala", "tag": "profile", "profile": {"diet": "vegetarian"}}
+{"query": "dumplings", "expected": "veg_momos", "tag": "profile", "profile": {"diet": "vegetarian"}}
+{"query": "kathi roll", "expected": "paneer_roll", "tag": "profile", "profile": {"diet": "vegetarian"}}
+{"query": "burger", "expected": "veggie_burger", "tag": "profile", "profile": {"diet": "vegetarian"}}
+{"query": "chicken biryani", "expected": "chicken_biryani", "tag": "profile", "profile": {"diet": "vegetarian"}}
+{"query": "satay", "expected": "chicken_satay", "tag": "profile", "profile": {"allergens": ["peanut"]}}
+{"query": "nihari", "expected": "nihari", "tag": "profile", "profile": {"diet": "vegetarian"}}
+{"query": "lassi", "expected": "sweet_lassi", "tag": "profile", "profile": {"diet": "vegan"}}
+{"query": "kebab", "expected": "seekh_kebab", "tag": "profile", "profile": {"diet": "vegetarian"}}
+{"query": "momos", "expected": "veg_momos", "tag": "profile", "profile": {"diet": "vegetarian"}}
+{"query": "fried rice", "expected": "veg_fried_rice", "tag": "profile", "profile": {"diet": "vegetarian"}}

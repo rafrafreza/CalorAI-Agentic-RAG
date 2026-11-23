@@ -1,254 +1,246 @@
 """
-LangGraph node implementations.
+Graph nodes. Each node has one job and records a timed span into ``state.trace``.
 
-Each node modifies the AgentState and returns the updated state.
-Nodes are the building blocks of the conversation graph:
-
-  preprocess → load_context → agent ↔ tools → post_process
-
-The graph is inspectable: each node has a single, documented responsibility.
+    ingest   - photo? run the vision model, merge its items with the caption (one meal)
+    retrieve - memory RAG (pinned + relevant facts) and *speculative* nutrition retrieval:
+               food mentions are grounded BEFORE the LLM runs, so the model usually
+               logs in one tool round instead of lookup -> log -> reply
+    agent    - Gemini with tools, or the deterministic offline engine (no key / outage)
+    tools    - executes tool calls and records structured results as ``actions``
 """
 
+from __future__ import annotations
+
+import asyncio
+import contextlib
 import json
-import os
-import time
-from datetime import date
+import logging
+from datetime import datetime
 
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
-from dotenv import load_dotenv
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
+from langgraph.config import get_stream_writer
+from langgraph.prebuilt import ToolNode
 
+from backend.agent import offline
+from backend.agent.prompts import SYSTEM_PROMPT
 from backend.agent.state import AgentState
-from backend.agent.prompts import SYSTEM_PROMPT, MEMORY_EXTRACTION_PROMPT
 from backend.agent.tools import ALL_TOOLS
+from backend.core.llm import get_chat_model
+from backend.core.telemetry import span
 from backend.db.database import get_db
-from backend.db.memory import (
-    get_all_memory,
-    upsert_memory,
-    save_message,
-    get_conversation_history,
-)
-from backend.vision.processor import extract_food_from_image
+from backend.db.memory import get_all_memory, get_relevant_memories
+from backend.rag.mentions import detect_meal_type
+from backend.rag.profile import profile_from_memories
+from backend.rag.service import Grounding, get_rag
 
-load_dotenv()
+log = logging.getLogger("calorai.agent")
+MAX_TOOL_ROUNDS = 6
+_tool_node = ToolNode(ALL_TOOLS)
 
 
-def preprocess(state: AgentState) -> dict:
-    """
-    Preprocess the incoming message.
+def message_text(content) -> str:
+    """Text of a message whose content may be a string or a list of content blocks (Gemini 3)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type", "text") == "text":
+                parts.append(block.get("text", ""))
+        return "".join(parts)
+    return ""
 
-    - If an image is provided, call the vision model to extract food data
-    - Merge vision output with any text caption into a single message
-    - This ensures photo + caption → ONE meal log (not two)
-    """
+
+def _emit(event: dict) -> None:
+    with contextlib.suppress(Exception):  # not running under a streaming context
+        get_stream_writer()(event)
+
+
+def _uid(state: AgentState, config: RunnableConfig | None) -> str:
+    return state.get("user_id") or (config or {}).get("configurable", {}).get("user_id") or "default"
+
+
+# ── ingest ───────────────────────────────────────────────────────────────────
+
+
+async def ingest(state: AgentState, config: RunnableConfig) -> dict:
     image_path = state.get("image_path")
-    image_description = None
+    if not image_path:
+        return {"trace": []}
+    trace: list[dict] = []
+    _emit({"type": "step", "node": "ingest", "label": "Reading your photo"})
+    from backend.vision.processor import extract_food_from_image, summarize_for_agent
 
-    if image_path:
+    with span("vision", trace) as info:
+        if get_chat_model("agent") is None:
+            info["skipped"] = "offline"
+            return {"vision": {"error": "Photo analysis needs a Gemini API key."}, "trace": trace}
         try:
-            vision_result = extract_food_from_image(image_path)
-            image_description = json.dumps({
-                "description": vision_result.description,
-                "items": [item.model_dump() for item in vision_result.items],
-                "confidence": vision_result.confidence,
-                "notes": vision_result.notes,
-            })
+            result = await asyncio.to_thread(extract_food_from_image, image_path)
+        except Exception as exc:
+            log.warning("vision failed: %s", exc)
+            info["error"] = str(exc)
+            return {"vision": {"error": f"Couldn't analyse the photo ({exc.__class__.__name__})."}, "trace": trace}
+        info["items"] = len(result.items)
 
-            # Get the last human message and merge vision data into it
-            messages = list(state["messages"])
-            if messages and isinstance(messages[-1], HumanMessage):
-                original_text = messages[-1].content
-                confidence = vision_result.confidence
-
-                # Build merged message
-                if confidence < 0.7:
-                    vision_prefix = (
-                        f"[📸 Image analysis (low confidence {confidence:.0%})]\n"
-                        f"I see what might be: {vision_result.description}\n"
-                        f"Items detected: {', '.join(f'{i.quantity} {i.unit} {i.name}' for i in vision_result.items)}\n"
-                        f"⚠️ Notes: {vision_result.notes}\n"
-                    )
-                else:
-                    vision_prefix = (
-                        f"[📸 Image analysis (confidence {confidence:.0%})]\n"
-                        f"Detected: {vision_result.description}\n"
-                        f"Items: {', '.join(f'{i.quantity} {i.unit} {i.name}' for i in vision_result.items)}\n"
-                    )
-
-                if original_text and original_text.strip():
-                    merged = f"{vision_prefix}\nUser caption: {original_text}"
-                else:
-                    merged = vision_prefix
-
-                # Replace the last message with the merged one
-                messages[-1] = HumanMessage(content=merged)
-                return {
-                    "messages": messages,
-                    "image_description": image_description,
-                }
-
-        except Exception as e:
-            # If vision fails, proceed with text only
-            image_description = json.dumps({
-                "error": str(e),
-                "confidence": 0.0,
-            })
-
-    return {"image_description": image_description}
+    last = state["messages"][-1]
+    merged = HumanMessage(content=summarize_for_agent(result, state.get("user_text", "")), id=last.id)
+    return {"messages": [merged], "vision": result.model_dump(), "trace": trace}
 
 
-def load_context(state: AgentState) -> dict:
-    """
-    Load relevant memory and conversation history into context.
-
-    THIS IS THE MEMORY RETRIEVE PATH — where we decide what memory
-    to pull into the agent's context.
-
-    Strategy:
-      - Always load: preferences (dietary restrictions) + targets (nutrition goals)
-      - Conditionally: shortcuts (when user references "my usual", "same as", etc.)
-      - Format as a concise "User Profile" block in the system message
-    """
-    user_id = state.get("user_id", "default")
-    session_id = state.get("session_id", "default")
-
-    # Determine which memory categories to load
-    categories = ["preference", "target"]  # Always loaded
-
-    # Check if user message contains reference-like patterns
-    messages = state.get("messages", [])
-    last_user_msg = ""
-    for msg in reversed(messages):
-        if isinstance(msg, HumanMessage):
-            last_user_msg = msg.content.lower()
-            break
-
-    # Load relevant memory using semantic search
-    with get_db() as conn:
-        from backend.db.memory import get_relevant_memories
-        memories = get_relevant_memories(conn, user_id, last_user_msg, top_k=4, threshold=0.5)
-
-    # Format memory context
-    if memories:
-        memory_lines = []
-        for m in memories:
-            memory_lines.append(f"- [{m['category']}] {m['key']}: {m['value']}")
-        memory_context = (
-            "\n## User Profile (from memory)\n"
-            + "\n".join(memory_lines)
-        )
-    else:
-        memory_context = "\n## User Profile\nNo stored preferences or goals yet."
-
-    return {"memory_context": memory_context}
+# ── retrieve ─────────────────────────────────────────────────────────────────
 
 
-def build_system_message(state: AgentState) -> SystemMessage:
-    """Build the system message with memory context injected."""
-    memory_context = state.get("memory_context", "")
-    current_date = date.today().isoformat()
-
-    prompt = SYSTEM_PROMPT.format(
-        memory_context=memory_context,
-        current_date=current_date,
-    )
-    return SystemMessage(content=prompt)
+def _render_memory(facts: list[dict]) -> str:
+    if not facts:
+        return "No stored preferences or goals yet."
+    return "\n".join(f"- [{f['category']}] {f['key']}: {f['value']}" for f in facts)
 
 
-def agent_node(state: AgentState) -> dict:
-    """
-    Core agent node — invokes the LLM with tools bound.
-
-    Uses Gemini Flash for fast text reasoning + tool calling.
-    The LLM decides whether to:
-      (a) call a tool (the graph loops back through tool execution)
-      (b) respond to the user (the graph exits the loop)
-
-    This IS the ambiguity decision point — the LLM judges whether it has
-    enough info to log or needs to ask a clarifying question.
-    """
-    # Build the full message list with system prompt
-    system_msg = build_system_message(state)
-    messages = [system_msg] + list(state["messages"])
-
-    # Create the LLM with tools bound
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-3.1-flash-lite",
-        temperature=0.3,
-        max_output_tokens=2048,
-    )
-    llm_with_tools = llm.bind_tools(ALL_TOOLS)
-
-    # Invoke
-    response = llm_with_tools.invoke(messages)
-
-    return {"messages": [response]}
+def _render_groundings(groundings: list[Grounding]) -> str:
+    if not groundings:
+        return "(No food mentions detected in the latest message. Use lookup_nutrition if needed.)"
+    return "\n".join(json.dumps(g.to_llm(), ensure_ascii=False) for g in groundings)
 
 
-def background_post_process(user_id: str, session_id: str, last_user_msg: str, last_assistant_msg: str):
-    """
-    Post-process after the agent responds.
-    Runs asynchronously as a FastAPI BackgroundTask.
-
-    THIS IS THE MEMORY WRITE PATH — where we decide what facts to persist.
-
-    1. Extract any facts worth remembering from the conversation turn
-    2. Save conversation history for multi-turn context
-    """
-    if not last_user_msg or not last_assistant_msg:
-        return
-
-    # ── Memory extraction (LLM-driven) ──────────────────────────────────
-    try:
-        extraction_prompt = MEMORY_EXTRACTION_PROMPT.format(
-            user_message=last_user_msg,
-            assistant_message=last_assistant_msg,
-        )
-
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-flash-lite",
-            temperature=0.1,
-            max_output_tokens=512,
-        )
-        response = llm.invoke([HumanMessage(content=extraction_prompt)])
-        raw = response.content.strip()
-
-        # Strip markdown code fences if present
-        if raw.startswith("```"):
-            lines = raw.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
-            raw = "\n".join(lines)
-
-        extracted = json.loads(raw)
-
-        if extracted and isinstance(extracted, list):
-            with get_db() as conn:
-                from backend.db.memory import generate_embedding
-                for entry in extracted:
-                    if all(k in entry for k in ("key", "value", "category")):
-                        # Generate embedding for semantic search
-                        fact_text = f"{entry['key']}: {entry['value']}"
-                        try:
-                            emb = generate_embedding(fact_text)
-                        except Exception:
-                            emb = None
-                            
-                        upsert_memory(
-                            conn,
-                            user_id,
-                            entry["key"],
-                            entry["value"],
-                            entry["category"],
-                            embedding=emb,
-                        )
-    except (json.JSONDecodeError, Exception):
-        # Memory extraction is best-effort — don't break the response
-        pass
-
-    # ── Save conversation history ────────────────────────────────────────
-    try:
+async def retrieve(state: AgentState, config: RunnableConfig) -> dict:
+    trace: list[dict] = []
+    user_id = _uid(state, config)
+    text = state.get("user_text", "")
+    _emit({"type": "step", "node": "retrieve", "label": "Searching nutrition knowledge"})
+    with span("retrieve", trace) as info:
         with get_db() as conn:
-            save_message(conn, user_id, session_id, "user", last_user_msg)
-            save_message(conn, user_id, session_id, "assistant", last_assistant_msg)
-    except Exception:
-        pass
+            memories = get_relevant_memories(conn, user_id, text)
+            profile = profile_from_memories(get_all_memory(conn, user_id))
+        rag = get_rag()
+
+        def _ground() -> list[Grounding]:
+            found = rag.ground_message(text, profile) if text else []
+            vision = state.get("vision") or {}
+            for item in vision.get("items", []):
+                found.append(rag.ground(item["name"], item.get("quantity"), item.get("unit"), profile))
+            return found
+
+        groundings = await asyncio.to_thread(_ground)
+        info.update(mentions=len(groundings), grounded=sum(g.usable for g in groundings), memories=len(memories))
+    return {
+        "memory_context": _render_memory(memories),
+        "memories_used": [{k: m.get(k) for k in ("key", "value", "category", "pinned", "score")} for m in memories],
+        "profile": profile.as_dict(),
+        "groundings": [g.to_ui() for g in groundings],
+        "grounding_context": _render_groundings(groundings),
+        "meal_type_hint": detect_meal_type(text),
+        "trace": trace,
+    }
+
+
+# ── agent ────────────────────────────────────────────────────────────────────
+
+
+def _system_prompt(state: AgentState) -> SystemMessage:
+    now = datetime.now()
+    return SystemMessage(
+        content=SYSTEM_PROMPT.format(
+            weekday=now.strftime("%A"),
+            today=now.date().isoformat(),
+            now=now.strftime("%H:%M"),
+            memory_context=state.get("memory_context", ""),
+            grounding_context=state.get("grounding_context", ""),
+        )
+    )
+
+
+def _current_turn(messages: list) -> list:
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            return messages[i:]
+    return messages
+
+
+def _offline_turn(state: AgentState, user_id: str, degraded: bool) -> tuple[str, list[dict]]:
+    rag = get_rag()
+    with get_db() as conn:
+        profile = profile_from_memories(get_all_memory(conn, user_id))
+    text = state.get("user_text", "")
+    groundings = rag.ground_message(text, profile) if text else []
+    return offline.respond(user_id, text, groundings, state.get("meal_type_hint"), raw_input=text, degraded=degraded)
+
+
+async def agent(state: AgentState, config: RunnableConfig) -> dict:
+    trace: list[dict] = []
+    user_id = _uid(state, config)
+    llm = get_chat_model("agent")
+    _emit({"type": "step", "node": "agent", "label": "Thinking"})
+    with span("agent", trace) as info:
+        if llm is None:
+            info["mode"] = "offline"
+            reply, actions = await asyncio.to_thread(_offline_turn, state, user_id, False)
+            return {"messages": [AIMessage(content=reply)], "actions": actions, "trace": trace}
+
+        turn = _current_turn(state["messages"])
+        rounds = sum(1 for m in turn if isinstance(m, AIMessage) and m.tool_calls)
+        try:
+            model = llm.bind_tools(ALL_TOOLS) if rounds < MAX_TOOL_ROUNDS else llm
+            response = await model.ainvoke([_system_prompt(state), *state["messages"]], config)
+        except Exception as exc:
+            log.warning("LLM call failed (%s): %s", exc.__class__.__name__, exc)
+            info["error"] = exc.__class__.__name__
+            if not any(isinstance(m, ToolMessage) for m in turn):
+                info["mode"] = "degraded"
+                reply, actions = await asyncio.to_thread(_offline_turn, state, user_id, True)
+                return {"messages": [AIMessage(content=reply)], "actions": actions, "trace": trace}
+            done = [a["tool"] for a in state.get("actions", [])]
+            reply = (
+                (
+                    "I completed " + ", ".join(done) + " but lost connection to the AI model before replying. "
+                    "Check the dashboard — your log is saved."
+                )
+                if done
+                else "The AI model is unavailable. Please try again."
+            )
+            return {"messages": [AIMessage(content=reply)], "trace": trace}
+
+        usage = getattr(response, "usage_metadata", None) or {}
+        info.update(
+            mode="gemini",
+            tool_calls=[tc["name"] for tc in response.tool_calls],
+            input_tokens=usage.get("input_tokens"),
+            output_tokens=usage.get("output_tokens"),
+        )
+    return {"messages": [response], "trace": trace}
+
+
+# ── tools ────────────────────────────────────────────────────────────────────
+
+
+def _parse(content) -> dict:
+    try:
+        data = json.loads(message_text(content))
+        return data if isinstance(data, dict) else {"result": data}
+    except (TypeError, json.JSONDecodeError):
+        return {"status": "error", "error": message_text(content)[:500]}
+
+
+async def tools(state: AgentState, config: RunnableConfig) -> dict:
+    trace: list[dict] = []
+    last = state["messages"][-1]
+    names = [tc["name"] for tc in getattr(last, "tool_calls", [])]
+    _emit({"type": "step", "node": "tools", "label": "Running " + ", ".join(names)})
+    with span("tools", trace, calls=names):
+        out = await _tool_node.ainvoke(state, config)
+    actions = [
+        {"tool": m.name, "call_id": m.tool_call_id, "result": _parse(m.content)}
+        for m in out.get("messages", [])
+        if isinstance(m, ToolMessage)
+    ]
+    return {"messages": out.get("messages", []), "actions": actions, "trace": trace}
+
+
+def route_after_agent(state: AgentState) -> str:
+    last = state["messages"][-1]
+    if isinstance(last, AIMessage) and last.tool_calls:
+        return "tools"
+    return "end"
