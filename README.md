@@ -1,323 +1,286 @@
-# CalorAI Chat
+<p align="center">
+  <img src="assets/banner.png" alt="CalorAI — every calorie is looked up, not guessed" width="100%" />
+</p>
 
-A conversational meal-logging agent that lets you track nutrition by texting naturally — like messaging a friend, not filling out forms.
+<p align="center">
+  <a href="https://github.com/rafrafreza/CalorAI-Agentic-RAG/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/rafrafreza/CalorAI-Agentic-RAG/actions/workflows/ci.yml/badge.svg" /></a>
+  <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11+-1c1915" />
+  <img alt="LangGraph" src="https://img.shields.io/badge/LangGraph-agent-1c1915" />
+  <img alt="Hybrid RAG" src="https://img.shields.io/badge/RAG-BM25%20%2B%20phonetic%20%2B%20dense-d18a12" />
+  <img alt="Retrieval Hit@1" src="https://img.shields.io/badge/held--out%20Hit%401-95.2%25-46733f" />
+  <img alt="Tests" src="https://img.shields.io/badge/tests-126%20passing-46733f" />
+</p>
 
-Built with **LangGraph** (explicit state graph control), **Gemini** (text + vision), **FastAPI**, **SQLite**, and **React**.
+**CalorAI is a conversational nutrition agent whose numbers are grounded, not guessed.** You text it the way you'd text a friend — *"had 2 parathas and chai"*, *"leftover biryani, maybe two thirds of the box"*, *"actually that was 3 rotis not 2"*, or a photo of your plate — and it logs the meal with calories pulled from a curated nutrition knowledge base through a hybrid retrieval pipeline. Every line item carries its source; anything not in the knowledge base is labelled as an estimate.
 
----
+It started as the **CalorAI take-home challenge** (a conversational meal-logging agent with memory, vision and correction handling). v2 rebuilds it around the problem that actually matters for an AI calorie tracker: **LLMs hallucinate nutrition numbers and can't do arithmetic.**
 
-## Table of Contents
-
-- [Project Overview](#project-overview)
-- [Setup / Installation](#setup--installation)
-- [Model Choices and Why](#model-choices-and-why)
-- [How Memory Works](#how-memory-works)
-- [Tool Design](#tool-design)
-- [Latency Numbers and Optimization](#latency-numbers-and-optimization)
-- [Assumptions and Trade-offs](#assumptions-and-trade-offs)
-- [Time Breakdown](#time-breakdown)
-- [What I'd Fix or Build Next](#what-id-fix-or-build-next)
-- [AI Tool Usage](#ai-tool-usage)
+<p align="center"><img src="assets/screenshot-log.png" alt="Chat with itemised nutrition receipts and a live Nutrition Facts panel" width="100%" /></p>
 
 ---
 
-## Project Overview
+## Contents
 
-CalorAI Chat is a conversational meal-logging agent that handles the messiness of how people actually describe food: half-sentences, photos, corrections ("actually that was 3 rotis not 2"), references ("same as yesterday"), and casual preference sharing ("I'm vegetarian btw").
+- [Highlights](#highlights)
+- [Architecture](#architecture)
+- [The RAG engine](#the-rag-engine)
+- [Evaluation](#evaluation)
+- [The agent](#the-agent)
+- [Product & UI](#product--ui)
+- [Quick start](#quick-start)
+- [API](#api)
+- [Engineering decisions](#engineering-decisions)
+- [Project structure](#project-structure)
+- [v1 → v2](#v1--v2)
+- [Roadmap](#roadmap)
 
-### Core Features Implemented
+## Highlights
 
-1. **Conversational agent with tool calling** — LangGraph state graph with 8 tools
-2. **Persistent database** — SQLite with meals, memory, and conversation history
-3. **Running daily totals** — computed on-the-fly via SUM queries, always correct through edits/deletions
-4. **Image input on a separate model** — Gemini Vision extracts food data, feeds into text pipeline
-5. **Persistent memory** — LLM-driven extraction + selective retrieval, survives across sessions
-6. **Multi-turn ambiguity handling** — explicit in the graph: agent decides to ask vs. log
+| | |
+|---|---|
+| 🔎 **Hybrid retrieval, built from first principles** | BM25 + a *phonetic* character-n-gram channel (handles `parontha`, `chhole`, `biriyaani`) + optional Gemini embeddings, fused with Reciprocal Rank Fusion and reranked on interpretable features. ~2 ms per query, no vector DB needed. |
+| 🎯 **Calibrated decisions, not just top-k** | Every lookup ends in `grounded`, `ambiguous` or `no_match`. Out-of-knowledge-base foods **abstain** (93.8% on held-out queries) so the agent estimates *and says so* instead of passing off "banana smoothie" as "dragon fruit smoothie". |
+| 🧮 **The LLM proposes, the engine disposes** | The model decides *what* you ate; deterministic code scales portions (`two thirds of the box`, `200 g`, `10 almonds`) and sums macros. Corrections replace a meal in place — double counting is structurally impossible. |
+| 🥗 **Profile-aware RAG** | Memory shapes retrieval: a vegetarian saying *"biryani"* gets **Veg Biryani**; *"chicken biryani"* is respected but flagged. Allergens are surfaced on every match. |
+| ⚡ **Speculative retrieval** | Food mentions are grounded *before* the LLM runs and injected as context, so the agent usually logs in one tool round instead of lookup → log → reply. Dense embeddings are only called when the cheap channels are unsure. |
+| 📏 **Measured, not vibes** | 221 labelled retrieval queries, dev/test split, ablation table, and a **CI quality gate** that fails the build if held-out quality regresses. |
+| 🧪 **126 offline tests** | A scripted chat model drives the *real* LangGraph agent through tool calls, corrections, SSE streaming and provider outages — in CI, with no API key. |
+| 🛟 **Graceful degradation** | No key, or Gemini down? A deterministic offline engine on the same RAG stack keeps logging, corrections, goals and totals working. |
+| 🧾 **A UI that shows its work** | Meals print as itemised *nutrition receipts* with per-line provenance; a live Nutrition Facts panel; a "How I got this" trace per reply; and a Knowledge Explorer to interrogate the retriever. |
 
-### Architecture
+## Architecture
 
+```mermaid
+flowchart LR
+    U([User: text / photo]) -->|SSE| API[FastAPI<br/>/api/chat/stream]
+    API --> G
+
+    subgraph G[LangGraph agent]
+        direction LR
+        I[ingest<br/><small>vision → items</small>] --> R[retrieve<br/><small>memory RAG +<br/>speculative grounding</small>]
+        R --> A[agent<br/><small>Gemini + tools<br/>or offline engine</small>]
+        A -- tool calls --> T[tools]
+        T --> A
+    end
+
+    R <--> RAG
+    T <--> SVC[Domain service<br/><small>grounding · portion math ·<br/>guards · totals</small>]
+    SVC <--> RAG[(Nutrition RAG<br/>408 foods)]
+    SVC <--> DB[(SQLite<br/>meals · memory · history)]
+    A -. after response .-> MW[memory writer<br/><small>gated LLM extraction</small>]
+    MW --> DB
 ```
-User Message ──→ [preprocess] ──→ [load_context] ──→ [agent] ←──→ [tools] ──→ [post_process] ──→ Response
-                     │                  │                │                          │
-                     │                  │                │                          │
-                 Vision model      Memory DB         Gemini Flash            Memory extraction
-               (if image)      (selective load)    + tool calling          (LLM-driven write)
+
+One chat turn:
+
+1. **ingest** — if there's a photo, a separate vision call returns structured items (it never converses or produces calories). Photo + caption become *one* turn, so *"half of this was my brother's"* adjusts portions instead of logging twice.
+2. **retrieve** — loads memory (safety-critical facts are **pinned**, the long tail is retrieved), builds the diet/allergy profile, extracts food mentions and grounds them through the RAG engine.
+3. **agent** — Gemini with 10 tools sees the grounded context (KB ids, scaled macros, ambiguity, conflicts) and decides: log, ask, correct or answer. Without a key, the deterministic offline engine handles the turn.
+4. **tools** — thin adapters over the domain service, which re-grounds every item, does the math, applies duplicate/typo guards and returns running totals.
+5. **stream** — node steps, retrieval results, tool calls, meal changes and tokens stream to the UI as Server-Sent Events; memory extraction runs *after* the response.
+
+## The RAG engine
+
+`backend/rag/` — dependency-light (pure Python + numpy), fully unit-tested, and explainable down to each feature.
+
+```mermaid
+flowchart LR
+    Q["'leftover biryani,<br/>two thirds of the box'"] --> M[mention extraction<br/>+ quantity parsing]
+    M --> B[BM25<br/><small>stemmed + folded terms</small>]
+    M --> F[phonetic char-3-grams<br/><small>per name/alias, max-pooled</small>]
+    M -. low confidence only .-> D[dense<br/><small>gemini-embedding-001</small>]
+    B --> RRF[Reciprocal<br/>Rank Fusion]
+    F --> RRF
+    D --> RRF
+    RRF --> RR[feature reranker<br/><small>exact · coverage · form-F1 ·<br/>phonetic · fused · prior</small>]
+    RR --> DEC{calibrated<br/>decision}
+    DEC -->|grounded| P[portion math<br/><small>0.667 box → 1 plate → 350 kcal</small>]
+    DEC -->|ambiguous| MAT[materiality check<br/><small>ask only if &gt;20% kcal apart</small>]
+    DEC -->|no_match| EST[agent must estimate<br/>and label it]
+    PR[diet / allergy profile] --> RR
 ```
 
----
+**Knowledge base.** [`foods.csv`](backend/rag/data/foods.csv) — 408 foods (South Asian depth plus global staples), 1,783 names, aliases and transliterations, per-serving macros, gram weights, diet class, allergens and a **provenance tag on every row** (`usda-ref`, `recipe-avg`, `label-avg`). The KB is tested like code: Atwater energy consistency for every row, enum validity, no alias pointing at two foods, and **self-retrieval** — every one of the 408 foods must come back first when searched by its own name.
 
-## Setup / Installation
+**Text views.** Two complementary views of every string: an *orthographic* one (normalised, stemmed) and a *phonetic* one that folds the many ways South Asian dishes are romanised (`dhal/daal/dal`, `chhole/chole`, `keema/qeema`, `idly/idli`). Token similarity takes the best of both views — folding helps transliterations but can hurt English typos (`oatmeel` folds towards `oatmilk`), so each view covers the other's blind spot.
 
-### Prerequisites
+**Channels & fusion.** BM25 catches lexical evidence and English glosses (*"lentil curry"*); the phonetic n-gram channel indexes each name/alias separately and max-pools per food so one strong alias isn't diluted; the dense channel (optional) catches paraphrase. RRF combines ranks, so no cross-channel score calibration is needed.
 
-- Python 3.11+
-- Node.js 18+ (for the React frontend — optional, API works standalone)
-- A [Gemini API key](https://aistudio.google.com/apikey)
+**Reranking & decisions.** Interpretable features, all in `[0, 1]`: exact surface-form match, soft token coverage, best-form F1 (penalises extra qualifiers — *"biryani"* vs *"chicken biryani"*), phonetic similarity, fused rank and a small popularity prior. A **coverage penalty** stops partial explanations from grounding (*"dragon fruit smoothie"* ≠ *"banana smoothie"*). The top score vs calibrated thresholds yields the decision; near-ties are `ambiguous`, and a **materiality check** decides whether the difference is worth a clarifying question.
 
-### Quick Start
+**Profile-aware disambiguation.** If the best match conflicts with the user's diet or allergies *and the user didn't name the conflicting ingredient*, the closest compatible variant within a margin is promoted (preferring the closest diet: Veg before Egg Biryani for a vegetarian). Explicit requests are never overridden — conflicts are attached instead.
+
+**Adaptive dense escalation.** The embedding call costs a network round trip, so it only runs when lexical confidence is below a threshold; corpus vectors are cached on disk keyed by model + KB fingerprint, built in a background thread, and the system silently runs lexical-only if they're unavailable.
+
+**Quantities & portions.** `parse_quantity` handles numbers, fractions (`1 1/2`, `½`, `two thirds`), number words, units and containers; `portion.py` converts to grams with explicit, user-visible assumptions (`1 box ≈ 1.5 servings`, `~1 g/ml`) and per-piece weights so *"10 almonds"* is 12 g, not ten 28 g servings.
+
+## Evaluation
+
+`python -m evals.retrieval_eval` — 221 labelled queries across 10 categories, including 29 out-of-KB queries that must abstain. Deterministic 50/50 dev/test split by query hash; reranker weights and thresholds were tuned on **dev only**. Numbers below are the **held-out test split**, lexical stack (no API key), reproduced in every CI run:
+
+| Configuration | Hit@1 | Hit@3 | MRR@10 | Hit@1 on unseen spellings |
+|---|---:|---:|---:|---:|
+| BM25 only | 76.0% | 85.6% | 0.817 | 35.5% |
+| Phonetic fuzzy only | 82.7% | 96.2% | 0.892 | 48.4% |
+| BM25 + fuzzy (RRF) | 87.5% | 96.2% | 0.920 | 67.7% |
+| **Hybrid + reranker (full)** | **95.2%** | **96.2%** | **0.961** | **83.9%** |
+
+| Decision metric (full system) | Value |
+|---|---:|
+| Grounding accuracy (right food, not abstained) | 94.2% |
+| Correct abstention on out-of-KB queries | 93.8% |
+| False-grounding rate on out-of-KB queries | 6.2% |
+| Latency p50 / p95 per query (CPU) | ~2 ms / ~4 ms |
+
+Per category: canonical, compound dishes, morphology, profile-conditioned and transliteration queries are at 100%; synonyms 95.8%, typos 94.1%. **Descriptive paraphrases** (*"fermented rice crepe"* → dosa) are the lexical stack's honest weak spot at 20% — exactly the gap the dense channel is designed to close (`make eval-dense` with a key). "Unseen spellings" are queries whose spelling is *not* in the alias table, i.e. the retriever had to generalise.
+
+The CI quality gate fails the build if held-out Hit@1 drops below 85%, grounding accuracy below 80% or correct abstention below 80%.
+
+**Agent behaviour** is covered by tests that run the real graph with a scripted model: grounded logging with KB ids in the prompt, in-place corrections (totals 300, not 200 + 300), confirmation relay for implausible amounts, provider outage → offline engine, the tool-loop cap, SSE token streaming, and conversion of every tool schema to a Gemini function declaration.
+
+## The agent
+
+**Tools** — ten, with non-overlapping responsibilities; the acting user always comes from the run config, never from the model:
+
+| Tool | Type | Notes |
+|---|---|---|
+| `lookup_nutrition` | READ | RAG grounding of one food: KB id, scaled macros, alternatives, conflicts |
+| `log_meal` | CREATE | One call per meal. Server grounds items and computes totals; KB values beat model guesses |
+| `update_meal` | UPDATE | Full corrected item list; description regenerated — never stale |
+| `delete_meal` | DELETE | Soft delete; ownership-checked |
+| `get_meals` / `search_meal_history` | READ | By date / fuzzy search over your own meals (*"that paneer wrap"*) |
+| `get_daily_totals` | READ | Totals + goals from memory + remaining |
+| `get_user_memory` / `set_user_memory` / `delete_user_memory` | MEMORY | Durable facts, user-erasable |
+
+**Guards that used to be prompt rules are now code.** v1 asked the model to recompute macros on corrections, rewrite descriptions, and question duplicates or "50 parathas". v2 enforces all of it: totals are summed server-side, descriptions are generated from items, and `log_meal` returns `needs_confirmation` for identical meals within 3 minutes or implausible amounts until the user confirms.
+
+**Memory.** Write path: after the response is sent, a cheap lexical gate skips turns that can't contain durable facts (most are plain food logs); otherwise a structured-output LLM call extracts facts, reusing existing keys to avoid near-duplicates. Read path: `preference` and `target` facts are **always pinned** (an allergy must never fall out of context because a message wasn't semantically similar — a v1 failure mode); shortcuts and personal context are retrieved by hybrid similarity, and cues like *"my usual"* pull in shortcuts. Memory is visible and deletable in the UI.
+
+**Resilience.** If the LLM fails before any tool has run, the turn is re-handled by the offline engine; if it fails mid-turn, the user is told which actions completed. A tool-round cap and LangGraph's recursion limit prevent loops.
+
+## Product & UI
+
+React 19 + TypeScript + Vite; no UI kit — a small, deliberate design system ("kitchen ledger": receipt paper, carbon ink, nutrition-label rules, one turmeric accent; Archivo variable width + IBM Plex Mono).
+
+- **Nutrition receipts** — each logged, corrected or removed meal prints as an itemised receipt: quantity, food, kcal, provenance (`✓ Recipe avg · kb:paratha` or `≈ Model estimate`), footnoted assumptions, and the old total struck through on corrections.
+- **Nutrition Facts panel** — today's totals as a live label with goal progress, % of goals, meals (deletable), a 7-day strip and the memory that's shaping retrieval.
+- **"How I got this"** — every reply expands into graph-node timings, retrieval decisions with per-channel ranks, and the memory facts that were in context.
+- **Knowledge Explorer** — query the retriever as the agent does, simulate a diet/allergy profile, and see ranks, feature bars, conflicts and the calibrated decision.
+
+| Glass-box trace | Knowledge Explorer |
+|---|---|
+| <img src="assets/screenshot-trace.png" alt="Expanded reasoning trace" /> | <img src="assets/screenshot-explorer.png" alt="Knowledge Explorer with vegetarian profile" /> |
+
+<p align="center"><img src="assets/screenshot-mobile.png" alt="Mobile: receipts and the Today sheet" width="70%" /></p>
+
+<sub>Screenshots are of the real app running on the offline engine (no API key).</sub>
+
+## Quick start
+
+**Docker (one container, API + web app):**
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/your-username/CalorAI-Chat.git
-cd CalorAI-Chat
-
-# 2. Set your API key
-cp .env.example .env
-# Edit .env and add your Gemini API key:
-# GOOGLE_API_KEY=your-actual-key-here
-
-# 3. Install Python dependencies
-pip install -r backend/requirements.txt
-
-# 4. Start the backend
-python -m uvicorn backend.main:app --reload --port 8000
-
-# 5. (Optional) Start the React frontend
-cd frontend
-npm install
-npm run dev
-# Opens at http://localhost:3000
+git clone https://github.com/rafrafreza/CalorAI-Agentic-RAG.git && cd CalorAI-Agentic-RAG
+cp .env.example .env          # optional: add GOOGLE_API_KEY for the full Gemini agent
+docker compose up --build     # → http://localhost:8000
 ```
 
-### Using the API directly (no frontend needed)
+**Local development:**
 
 ```bash
-# Text message
-curl -X POST http://localhost:8000/chat \
-  -F "message=had 2 parathas and chai for breakfast"
+pip install -r requirements-dev.txt
+uvicorn backend.main:app --reload --port 8000      # API + docs at /docs
 
-# With image
-curl -X POST http://localhost:8000/chat \
-  -F "message=half of this was my brother's" \
-  -F "image=@photo_of_plate.jpg"
-
-# Check daily totals
-curl http://localhost:8000/totals
-
-# View stored memory
-curl http://localhost:8000/memory
-
-# Latency metrics
-curl http://localhost:8000/metrics
+cd frontend && npm ci && npm run dev               # → http://localhost:3000
 ```
 
-### Running Tests
+Without `GOOGLE_API_KEY` everything runs on the offline engine — try *"had 2 parathas and chai"*, *"actually that was 3 parathas not 2"*, *"I'm vegetarian"*, *"how am I doing?"*. With a key you get the Gemini agent, photo analysis, LLM memory extraction and the dense channel.
 
 ```bash
-python -m pytest tests/ -v
+make test         # 126 tests, fully offline
+make eval         # retrieval ablations on the held-out split
+make lint         # ruff + tsc
 ```
 
----
+## API
 
-## Model Choices and Why
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/chat/stream` | Multipart (`message`, `session_id`, optional `image`) → SSE: `start`, `step`, `vision`, `retrieval`, `tool_call`, `tool_result`, `meal`, `token`, `done` |
+| `POST` | `/api/chat` | Same turn, single JSON response |
+| `GET` | `/api/dashboard` | Day totals, goals, meals, 7-day trend, memory, profile, grounded share |
+| `GET` · `DELETE` | `/api/meals`, `/api/meals/{id}` | List / delete meals |
+| `GET` · `DELETE` | `/api/memory`, `/api/memory/{key}` | Inspect / forget facts |
+| `GET` | `/api/rag/search?q=&diet=&allergens=` | Ranked candidates with channel ranks, features, decision |
+| `GET` | `/api/rag/analyze?text=` | Mention extraction + grounding for a whole message |
+| `GET` | `/api/rag/stats` | KB size, channel status, calibrated thresholds |
+| `GET` | `/health`, `/metrics` | Status; rolling p50/p95/p99 per chat path and per graph node |
 
-### Text Model: Gemini 2.5 Flash
+```bash
+curl -s -X POST localhost:8000/api/chat -F "message=leftover biryani, maybe two thirds of the box"
+curl -s "localhost:8000/api/rag/search?q=biryani&diet=vegetarian" | jq '.candidates[0].name'   # "Veg Biryani"
+```
 
-- **Why**: Fast enough for messaging-speed responses (~1-3s), strong tool-calling support, cost-effective for a test task
-- **Role**: Conversation reasoning, tool selection, ambiguity judgment, memory extraction
-- **Temperature**: 0.3 for the agent (natural but consistent), 0.1 for memory extraction (structured output)
+## Engineering decisions
 
-### Vision Model: Gemini 2.0 Flash (multimodal)
+| Decision | Why |
+|---|---|
+| **Hand-built hybrid retriever instead of a vector DB** | ~400 docs fit in memory; the hard part is *transliteration and abstention*, not ANN search. A transparent pipeline makes every ranking explainable and testable, and runs in CI without keys. |
+| **RRF + interpretable reranker** | No score calibration across BM25 / cosine / embeddings; features double as the UI's explanation. |
+| **Abstention as a first-class outcome** | A confidently wrong grounding is worse than an honest estimate. Measured explicitly (false-grounding rate). |
+| **Server-side arithmetic, generated descriptions** | Removes a whole class of LLM errors that v1 patched with prompt rules. |
+| **Speculative retrieval before the LLM** | Saves a tool round per logging turn; the agent still has `lookup_nutrition` for anything missed. |
+| **Pinned vs retrieved memory** | Safety-critical facts must never depend on similarity thresholds. |
+| **Totals via SUM, never materialised** (kept from v1) | Single source of truth — corrections can't leave totals stale. |
+| **SQLite + WAL** | Zero-ops for a single-node app; the schema migrates additively from v1 databases. |
+| **Offline engine** | Resilience to provider outages, zero-key try-out, and real end-to-end tests in CI. |
+| **Same provider for chat and vision, separated by role** | Vision only emits structured items; its items are grounded through the same RAG path as text, so a photo of biryani and the word "biryani" get the same numbers. |
 
-- **Why**: Native image understanding, same provider as text (single API key), strong food identification
-- **Role**: Structured food extraction ONLY — outputs a JSON description of what's on the plate
-- **Temperature**: 0.2 (we want consistent, structured output)
+**Honest limits.** KB values are reference approximations, not medical-grade data. The LLM-path latency depends on Gemini and is reported live at `/metrics` rather than claimed here (v1 measured ~1.6 s responses on `gemini-3.1-flash-lite`). Single-user by default (`user_id` is plumbed through every layer but there is no auth).
 
-### Why Same Provider for Both
+## Project structure
 
-This is a deliberate architectural choice, not "running everything through one model" (a stated red flag):
+```
+backend/
+  rag/            corpus · text views · BM25 & phonetic indexes · dense · retriever · quantity · portion · profile · mentions · service
+  agent/          LangGraph graph · nodes · tools · prompts · offline engine · memory writer
+  services/       nutrition_log — grounding, portion math, guards, goals (shared by tools, offline engine, API)
+  api/            chat (SSE) · data · rag · uploads
+  db/             SQLite schema, meals, memory & history
+  core/           settings · model factory · telemetry
+  vision/         photo → structured items
+evals/            retrieval eval harness + labelled dataset
+tests/            126 offline tests (scripted LLM, API, RAG, KB quality, eval gate)
+frontend/         React + TypeScript UI
+```
 
-1. **Architectural separation**: The vision model ONLY extracts structured food data (`{items, confidence, notes}`). It does NOT do conversation, tool calling, or reasoning. Its output feeds into the text pipeline as if the user had typed a description.
-2. **Practical benefits**: Native multimodal support, single API key, no extra integration, Gemini Flash is fast for both paths.
-3. **The separation is in the code**: Vision extraction happens in [`processor.py`](backend/vision/processor.py), text reasoning happens in [`nodes.py`](backend/agent/nodes.py). Different models, different prompts, different temperatures, different purposes.
+## v1 → v2
 
----
+| | v1 (challenge submission) | v2 |
+|---|---|---|
+| Nutrition data | 50-item hard-coded dict, exact-key lookup | 408-food KB with provenance, hybrid retrieval, abstention |
+| Macro arithmetic | LLM adds numbers | Server-side, deterministic |
+| Corrections | Prompt rules to recompute | `update_meal` replaces items; totals & description recomputed |
+| Duplicates / typos | Prompt instructions | Structural `needs_confirmation` |
+| Memory retrieval | Embedding similarity for everything | Pinned safety facts + hybrid retrieval; erasable in UI |
+| Responses | Blocking request | SSE streaming with live steps |
+| Without an API key | Unusable | Offline engine on the same RAG stack |
+| Tests | 15 | 126, incl. the real agent with a scripted LLM, plus an eval gate |
+| UI | Single chat column | Receipts, Nutrition Facts panel, trace, Knowledge Explorer |
 
-## How Memory Works
+v1's public LangSmith traces of the original agent: [logging](https://smith.langchain.com/public/87e028b4-b9ae-4ba7-ab48-d1a134e70d54/r/01a0661c-a70b-7ff0-a305-9ad6fb7061c3) · [setting memory](https://smith.langchain.com/public/66f54d6d-bfb9-4bb0-b38d-664f68d15508/r/01a0661e-d403-7a71-be02-8693715e0c76) · [recalling memory](https://smith.langchain.com/public/14ad6d07-44cd-4c78-9a8f-020d43e5bafc/r/01a0661f-a966-7933-b583-2e4e77b14f02) · [photo logging](https://smith.langchain.com/public/ed2110d3-b8ae-4fbe-823f-1a508a46bfd5/r/01a06620-b524-76e2-98e0-99aad7472573). LangSmith tracing still works in v2 via the `LANGSMITH_*` env vars.
 
-> *"This is the part we're most interested in."* — PDF
+## Roadmap
 
-### What's Stored
+- Run and publish the dense-channel ablation (`make eval-dense`), focused on descriptive queries.
+- Expand the KB from public USDA FoodData Central exports for long-tail coverage, keeping curated South Asian entries first.
+- An LLM-judged agent eval set (ask-vs-log, correction, photo+caption) with trajectory assertions on the live model.
+- Auth + Postgres/pgvector for multi-user deployment.
 
-| Category | Key Example | Value Example | When Written |
-|----------|------------|---------------|--------------|
-| `preference` | `dietary_restriction` | `vegetarian` | User says "I'm vegetarian btw" |
-| `shortcut` | `usual_breakfast` | `2 parathas and chai` | User defines "my usual" |
-| `target` | `protein_target` | `140g daily` | User says "I want to hit 140g protein" |
-| `personal` | `family_context` | `brother often shares meals` | User mentions family patterns |
+## AI-assisted development
 
-### What's NOT Stored
-
-- Individual meal data (already in the `meals` table)
-- Conversation history (stored separately, never called "memory")
-- Transient information ("I'm hungry")
-
-### Write Path (where we decide to store)
-
-In the [`post_process`](backend/agent/nodes.py) node, AFTER the agent has responded:
-
-1. A separate LLM call evaluates the conversation turn
-2. Prompt: "Is there a fact worth remembering from this exchange?"
-3. Returns a JSON array of `{key, value, category}` (or empty)
-4. Non-empty results are upserted into the `memory` table (ON CONFLICT → update)
-
-**Inspectable at**: [`nodes.py → post_process()`](backend/agent/nodes.py) — the memory extraction logic is ~30 lines, clearly separated.
-
-### Retrieve Path (where we decide what to load)
-
-In the [`load_context`](backend/agent/nodes.py) node, BEFORE the agent reasons:
-
-1. **Always loaded**: `preference` and `target` categories — these affect every response
-2. **Conditionally loaded**: `shortcut` category — only when the user message contains reference patterns ("my usual", "same as", "like yesterday")
-3. **Format**: Injected as a concise "User Profile" block in the system message — NOT raw JSON dump
-
-**Why selective**: Loading all memory every time bloats the prompt (PDF explicitly warns about this). Preferences and targets are always relevant; shortcuts are only needed when referenced.
-
-**Inspectable at**: [`nodes.py → load_context()`](backend/agent/nodes.py) — the category selection logic is explicit.
-
----
-
-## Tool Design
-
-8 tools with non-overlapping boundaries (this is explicitly evaluated):
-
-| Tool | Responsibility | CRUD Type |
-|------|---------------|-----------|
-| `log_meal` | Create a new meal entry | **CREATE** |
-| `update_meal` | Modify an existing meal (corrections) | **UPDATE** |
-| `delete_meal` | Soft-delete a meal | **DELETE** |
-| `get_meals` | Retrieve meal history (by date, last N, type) | **READ** |
-| `get_daily_totals` | Aggregated calories + macros for a day | **READ (aggregate)** |
-| `lookup_nutrition` | Nutrition data for a specific food item | **READ (reference)** |
-| `get_user_memory` | Retrieve stored facts about the user | **READ (memory)** |
-| `set_user_memory` | Store a persistent fact about the user | **WRITE (memory)** |
-
-### Why This Split
-
-- **No overlap**: Each tool has exactly one operation. `log_meal` only creates, `update_meal` only mutates. The agent can't accidentally double-count by logging instead of updating.
-- **Correction path**: "actually that was 3 rotis not 2" → agent calls `get_meals` to find the meal, then `update_meal` to correct it. Never `log_meal` (which would create a duplicate).
-- **Totals are always correct**: `get_daily_totals` runs a SUM query against the meals table. No materialized `daily_totals` table that could go stale. Corrections via `update_meal` are instantly reflected.
-- **Memory tools are separate from meal tools**: `get_user_memory` / `set_user_memory` are distinct from `get_meals` / `log_meal`. Memory is persistent facts; meals are data.
+Built with AI pair-programming (Claude Code), in line with the original challenge's encouragement of AI tools. Every claim in this README is backed by code in the repo and by checks that run in CI.
 
 ---
 
-## Latency Numbers and Optimization
-
-### Reported Latency (p50 / p95)
-
-| Path | p50 | p95 | Notes |
-|------|-----|-----|-------|
-| Text only | ~3-6s | ~8-12s | Single LLM call + tool execution |
-| With image | ~5-10s | ~10-15s | Vision call + text agent call (serial) |
-
-> **Important**: These numbers depend heavily on Gemini API latency, which varies by time of day and load. Run `GET /metrics` after several requests to see your actual numbers.
-
-### What I Did for Speed
-
-1. **Async Memory Extraction**: The post-response LLM memory extraction call has been moved to FastAPI `BackgroundTasks`. The user gets their chat response immediately, while memory extraction and history saving run silently in the background (halving perceived latency!).
-2. **Gemini Flash (not Pro)**: ~2-3x faster inference, sufficient quality for this task
-3. **Selective semantic memory retrieval**: Only load the top 4 most relevant memories via embeddings, not everything.
-4. **Concise system prompt**: ~500 tokens, not a novel — every token adds latency
-5. **Single meal log per message**: One `log_meal` call bundles all items, not separate calls per food item
-6. **Hardcoded nutrition table**: Avoids an external API call for common foods (~0ms vs ~200-500ms)
-
-### What I Didn't Fix (and Why)
-
-- **Streaming responses**: Given the nested LangGraph tool calls and React UI architecture, full SSE streaming adds significant fragility. The async background task update already reduced latency to ~1-2s, making streaming less critical for V1.
-- **Vision + text are serial**: The image path requires two LLM calls in series. You could parallelize the vision call with context loading, but the text agent needs the vision output, so the calls are fundamentally sequential.
-- **No response caching**: Repeated queries ("how am I doing?") hit the LLM every time. A short-lived cache for totals queries could save ~2s, but adds complexity.
-
----
-
-## Assumptions and Trade-offs
-
-| Decision | Rationale |
-|----------|-----------|
-| **SQLite** instead of Postgres | Sufficient for local, no-auth test task. No external dependency. We implemented semantic search using Python-based cosine similarity instead of pgvector to keep it lightweight. |
-| **Daily totals via SUM query** (no materialized table) | Avoids dual-write consistency bugs — the exact class of bug where "totals break on a correction." Slight CPU cost per query, but correctness is guaranteed. |
-| **Hardcoded nutrition table** (~50 foods) | PDF says "not evaluating your nutrition database." Gives consistent numbers for common foods; LLM estimates the rest. Trade-off: limited coverage. |
-| **Single user (no auth)** | PDF says "no authentication required." `user_id` defaults to "default" everywhere. Multi-user support would use LangGraph config-based injection. |
-| **Conversation history limit: 20 messages** | Prevents prompt bloat while maintaining multi-turn context. Trade-off: very long sessions lose early context. |
-| **Gemini for both text and vision** | See [Model Choices](#model-choices-and-why) above. |
-
----
-
-## Time Breakdown
-
-| Phase | Time | What I Did |
-|-------|------|-----------|
-| Requirements analysis + planning | ~30 min | Read PDF, designed schema, graph, tool boundaries, memory mechanism |
-| Database layer | ~30 min | SQLite schema, CRUD operations, context manager |
-| Agent core | ~1.5 hr | LangGraph graph, nodes, tools, prompts, state |
-| Vision pipeline | ~30 min | Gemini Vision integration, structured extraction, confidence handling |
-| Memory system | ~45 min | Write path (LLM extraction), retrieve path (selective loading), upsert logic |
-| FastAPI + React UI | ~45 min | HTTP endpoints, CORS, file upload, chat interface, Markdown rendering |
-| Testing + eval | ~30 min | 15 unit tests, 11 eval cases, correction no-double-count proof |
-| Latency + polish | ~30 min | Middleware, metrics endpoint, SDK migration |
-| Advanced Features (Async, Semantic Search) | ~1 hr | Shifted memory to BackgroundTasks, built embedding-based cosine similarity search, added human mistake handling |
-| README + documentation | ~30 min | This document |
-| **Total** | **~7 hrs** | |
-
----
-
-## Recently Shipped Advanced Features
-
-In the final hours of the assignment, I knocked out several advanced "nice-to-have" features:
-
-1. **Async Memory Extraction**: Shifted the 2nd LLM call to FastAPI `BackgroundTasks`, slashing response latency by ~50%.
-2. **Semantic Memory Retrieval**: Replaced crude keyword category matching with real Semantic Search using Gemini's `text-embedding-004` and cosine similarity. "I told you about my allergy" now correctly surfaces "User is allergic to peanuts."
-3. **Compound Meal Decomposition**: The agent's prompt was upgraded to rigorously decompose complex meals (e.g., "butter chicken and 2 naan") and query their macros individually before summing them, preventing hallucinated whole-dish estimates.
-4. **Human Mistake & Redundancy Handling**: The agent is now trained to explicitly catch and challenge duplicate texts ("Ate an apple" x2) or typo quantities ("Ate 50 parathas") before polluting the database.
-5. **LangSmith Tracing**: Wired up `.env.example` support for instant LangSmith graph tracing.
-6. **UX Markdown Rendering**: Added `react-markdown` to the frontend so the agent's macro breakdowns display cleanly structured instead of raw asterisks.
-
----
-
-## LangSmith Tracing
-
-As requested in the task brief, here are public LangSmith traces demonstrating the agent's thought process, state graph traversal, and tool executions across different scenarios:
-
-<img width="2022" height="222" alt="image" src="https://github.com/user-attachments/assets/c2fa9dea-ec01-4202-8629-d0dd73efc925" />
-
-
-- [**Basic Logging (Add Meals)**](https://smith.langchain.com/public/87e028b4-b9ae-4ba7-ab48-d1a134e70d54/r/01a0661c-a70b-7ff0-a305-9ad6fb7061c3?start_time=2026-09-03T07%3A12%3A28.939625Z): Shows the agent processing a text request and calling tools to log a meal.
-- [**Setting Memory**](https://smith.langchain.com/public/66f54d6d-bfb9-4bb0-b38d-664f68d15508/r/01a0661e-d403-7a71-be02-8693715e0c76?start_time=2026-09-03T07%3A14%3A51.523205Z): Demonstrates the background extraction process saving user facts into semantic memory.
-- [**Recalling Past Memory**](https://smith.langchain.com/public/14ad6d07-44cd-4c78-9a8f-020d43e5bafc/r/01a0661f-a966-7933-b583-2e4e77b14f02?start_time=2026-09-03T07%3A15%3A46.14933Z): Shows the agent retrieving context from a previous session before executing its task.
-- [**Multimodal Logging (Photo)**](https://smith.langchain.com/public/ed2110d3-b8ae-4fbe-823f-1a508a46bfd5/r/01a06620-b524-76e2-98e0-99aad7472573?start_time=2026-09-03T07%3A16%3A54.69193Z): Illustrates the vision pipeline extracting structured food data from an image and passing it to the text model.
-
-
-<img width="2392" height="1446" alt="image" src="https://github.com/user-attachments/assets/c2145d84-8c40-42f3-a480-b380d3468490" />
-
----
-
-## What I'd Fix or Build Next
-
-With more time, in priority order:
-
-1. **Streaming responses** — Currently the user waits for the full agent response. Streaming via SSE/WebSocket would make it feel like real messaging.
-2. **Confidence-based confirmation flow** — When vision confidence is low, force an interactive UI confirmation step before logging (currently it's prompt-instructed, not graph-enforced).
-3. **Postgres Migration** — Move off SQLite to a proper Postgres DB with `pgvector` native support.
-
----
-
-## AI Tool Usage
-
-This project was built with **Antigravity (Claude)** as a coding partner, as encouraged by the brief.
-
-### How AI Helped
-
-- **Architecture planning**: Discussed LangGraph graph structure, tool boundaries, and memory mechanism design
-- **Code generation**: Generated boilerplate (FastAPI endpoints, Pydantic models, React components) that I reviewed and refined
-- **Prompt engineering**: Iterated on system prompts for the agent, memory extraction, and vision modules
-- **Test coverage**: Helped identify edge cases (the sub-second timestamp ordering bug in conversation history)
-- **Documentation**: Structured the README sections and trade-off analysis
-
-### What I Did Myself
-
-- All architectural decisions (why LangGraph, why computed totals, why selective memory retrieval)
-- Tool boundary design and the reasoning behind each split
-- Identifying the three critical test cases and designing the correction flow
-- Trade-off analysis (what to optimize, what to leave as documented debt)
-- Review and validation of all generated code
-
-The AI significantly increased implementation speed while I focused on design decisions and correctness — exactly the workflow the brief encourages.
+<sub>Built by [Rafraf Reza](https://github.com/rafrafreza). Nutrition values are approximate references for a consumer logging app — not medical advice.</sub>

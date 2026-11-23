@@ -15,6 +15,7 @@ venv/
 
 # Database
 *.db
+*.db-*
 *.sqlite
 *.sqlite3
 
@@ -44,3 +45,8 @@ htmlcov/
 # Uploads
 uploads/
 
+
+# Caches & generated artifacts
+.cache/
+.ruff_cache/
+evals/results/

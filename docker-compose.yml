@@ -1,0 +1,15 @@
+services:
+  calorai:
+    build: .
+    image: calorai:latest
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false # without a key the app runs on the deterministic offline engine
+    volumes:
+      - calorai-data:/data
+    restart: unless-stopped
+
+volumes:
+  calorai-data:
